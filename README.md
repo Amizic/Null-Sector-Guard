@@ -75,8 +75,6 @@ This avoids the common LP64/LLP64 difference between 64-bit Linux and 64-bit Win
 - CMake 3.20 or newer.
 - OpenSSL 3.5 or newer, including development headers and `libcrypto`.
 
-No Boost, Qt, Catch2, GoogleTest or other third-party libraries are required. No `.bat` or `.sh` build scripts are included.
-
 ## CMake options
 
 Two CMake options are relevant:

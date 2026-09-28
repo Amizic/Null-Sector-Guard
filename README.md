@@ -11,7 +11,7 @@ The project intentionally keeps the public API small and easy to understand. It 
 
 The only external cryptographic dependency is OpenSSL 3.5 or newer. OpenSSL 3.5+ is required because native ML-KEM support was introduced in OpenSSL 3.5.
 
-Important: AES-512 does not exist as a standard AES variant. AES supports 128, 192 and 256-bit keys. Null-Sector Guard therefore uses AES-256-GCM. SHA-512 is used inside HKDF for key derivation.
+Important: AES supports 128, 192 and 256-bit keys. Null-Sector Guard therefore uses AES-256-GCM. SHA-512 is used inside HKDF for key derivation.
 
 ## Project structure
 
@@ -38,8 +38,6 @@ Null-Sector-Guard/
 |-- CMakeLists.txt
 `-- README.md
 ```
-
-There is one shared source tree for both Windows and Linux. The project does not duplicate `src` or `include` files per platform. There are no build helper scripts. All build steps are normal CMake commands documented below.
 
 ## Cross-platform design
 

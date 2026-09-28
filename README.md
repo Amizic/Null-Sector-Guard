@@ -1,0 +1,840 @@
+# Null-Sector Guard
+
+Null-Sector Guard is a small C++17 cryptographic library built directly on OpenSSL.
+
+The project intentionally keeps the public API small and easy to understand. It contains separate classes for:
+
+- RSA-4096 encryption and decryption using RSA-OAEP with SHA-256.
+- AES-256-GCM authenticated encryption and decryption.
+- ML-KEM-1024 post-quantum key encapsulation and decapsulation.
+- HKDF-SHA-512 key derivation used to combine the classical RSA secret and the ML-KEM shared secret into an AES-256 key.
+
+The only external cryptographic dependency is OpenSSL 3.5 or newer. OpenSSL 3.5+ is required because native ML-KEM support was introduced in OpenSSL 3.5.
+
+Important: AES-512 does not exist as a standard AES variant. AES supports 128, 192 and 256-bit keys. Null-Sector Guard therefore uses AES-256-GCM. SHA-512 is used inside HKDF for key derivation.
+
+## Project structure
+
+```text
+Null-Sector-Guard/
+|
+|-- include/
+|   |-- Export.hpp
+|   |-- RSA4096.hpp
+|   |-- AES256.hpp
+|   |-- MLKEM1024.hpp
+|   `-- KeyDerivation.hpp
+|
+|-- src/
+|   |-- RSA4096.cpp
+|   |-- AES256.cpp
+|   |-- MLKEM1024.cpp
+|   `-- KeyDerivation.cpp
+|
+|-- tests/
+|   |-- CMakeLists.txt
+|   `-- test_main.cpp
+|
+|-- CMakeLists.txt
+`-- README.md
+```
+
+There is one shared source tree for both Windows and Linux. The project does not duplicate `src` or `include` files per platform. There are no build helper scripts. All build steps are normal CMake commands documented below.
+
+## Cross-platform design
+
+The same source code is used on Windows and Linux. CMake produces the correct library format for the selected platform.
+
+Windows outputs:
+
+```text
+Shared build: Null-Sector-Guard.dll + import library
+Static build: Null-Sector-Guard.lib
+```
+
+Linux outputs:
+
+```text
+Shared build: libNull-Sector-Guard.so
+Static build: libNull-Sector-Guard.a
+```
+
+The implementation avoids platform-dependent integer types in places where an exact width matters.
+
+- Bytes are represented as `std::uint8_t`.
+- Explicit externally supplied byte counts use `std::uint32_t` where appropriate.
+- `std::size_t` is used only where the C++ standard library or OpenSSL requires an in-process buffer size.
+- No raw C++ structures are serialized or transmitted over the network.
+- No code assumes that `long`, `unsigned long`, pointers or `size_t` have the same width on Windows and Linux.
+
+This avoids the common LP64/LLP64 difference between 64-bit Linux and 64-bit Windows. For example, `unsigned long` is normally 64 bits on 64-bit Linux but remains 32 bits on 64-bit Windows. Null-Sector Guard does not use such types for protocol-visible data.
+
+## Requirements
+
+### Common requirements
+
+- C++17 compiler.
+- CMake 3.20 or newer.
+- OpenSSL 3.5 or newer, including development headers and `libcrypto`.
+
+No Boost, Qt, Catch2, GoogleTest or other third-party libraries are required. No `.bat` or `.sh` build scripts are included.
+
+## CMake options
+
+Two CMake options are relevant:
+
+```text
+BUILD_SHARED_LIBS
+NSG_BUILD_TESTS
+```
+
+`BUILD_SHARED_LIBS=OFF` builds a static library.
+
+`BUILD_SHARED_LIBS=ON` builds a dynamic/shared library.
+
+`NSG_BUILD_TESTS=ON` builds the small test program.
+
+`NSG_BUILD_TESTS=OFF` builds only the library.
+
+## Linux build
+
+### Static library
+
+```bash
+cmake -S . -B build-linux-static \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DBUILD_SHARED_LIBS=OFF \
+    -DNSG_BUILD_TESTS=ON
+
+cmake --build build-linux-static --parallel
+ctest --test-dir build-linux-static --output-on-failure
+```
+
+The static library will be similar to:
+
+```text
+build-linux-static/output/libNull-Sector-Guard.a
+```
+
+### Shared library
+
+```bash
+cmake -S . -B build-linux-shared \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DBUILD_SHARED_LIBS=ON \
+    -DNSG_BUILD_TESTS=ON
+
+cmake --build build-linux-shared --parallel
+ctest --test-dir build-linux-shared --output-on-failure
+```
+
+The shared library will be similar to:
+
+```text
+build-linux-shared/output/libNull-Sector-Guard.so
+```
+
+## Windows build
+
+Use a 64-bit Visual Studio Developer Command Prompt or another CMake-compatible C++17 toolchain.
+
+OpenSSL 3.5+ must be installed for the same architecture as the application. A 64-bit application must link against 64-bit OpenSSL.
+
+If CMake does not locate OpenSSL automatically, set `OPENSSL_ROOT_DIR`.
+
+Example:
+
+```bat
+cmake -S . -B build-windows-static ^
+    -DBUILD_SHARED_LIBS=OFF ^
+    -DNSG_BUILD_TESTS=ON ^
+    -DOPENSSL_ROOT_DIR=C:\OpenSSL-Win64
+
+cmake --build build-windows-static --config Release
+ctest --test-dir build-windows-static -C Release --output-on-failure
+```
+
+For a DLL:
+
+```bat
+cmake -S . -B build-windows-shared ^
+    -DBUILD_SHARED_LIBS=ON ^
+    -DNSG_BUILD_TESTS=ON ^
+    -DOPENSSL_ROOT_DIR=C:\OpenSSL-Win64
+
+cmake --build build-windows-shared --config Release
+ctest --test-dir build-windows-shared -C Release --output-on-failure
+```
+
+The shared build produces the DLL and the corresponding import library required by normal Windows C++ linking.
+
+With the supplied CMake configuration, generated Windows library files are placed in the `output` directory:
+
+```text
+build-windows-static\output\Null-Sector-Guard.lib
+
+build-windows-shared\output\Null-Sector-Guard.dll
+build-windows-shared\output\Null-Sector-Guard.lib
+```
+
+The `.lib` generated by a shared build is the Windows import library used when linking an application against the DLL.
+
+## Using the library from another CMake project
+
+If Null-Sector Guard is added as a subdirectory:
+
+```cmake
+add_subdirectory(path/to/Null-Sector-Guard)
+
+target_link_libraries(MyApplication
+    PRIVATE
+        NullSectorGuard::NullSectorGuard
+)
+```
+
+The consuming source file can then include:
+
+```cpp
+#include "RSA4096.hpp"
+#include "AES256.hpp"
+#include "MLKEM1024.hpp"
+#include "KeyDerivation.hpp"
+```
+
+## RSA4096 class
+
+Header:
+
+```text
+include/RSA4096.hpp
+```
+
+Implementation:
+
+```text
+src/RSA4096.cpp
+```
+
+RSA is configured as RSA-4096 with OAEP padding, SHA-256 and MGF1-SHA-256.
+
+### `generateKeyPair()`
+
+Purpose:
+Generates a new 4096-bit RSA public/private key pair.
+
+Input:
+None.
+
+Output:
+No direct return value. The generated key pair is stored inside the object.
+
+Example:
+
+```cpp
+nsg::RSA4096 rsa;
+rsa.generateKeyPair();
+```
+
+### `publicKeyPEM()`
+
+Purpose:
+Exports the current RSA public key in PEM format.
+
+Input:
+None.
+
+Output:
+`std::string` containing the public key PEM.
+
+Example:
+
+```cpp
+std::string publicKey = rsa.publicKeyPEM();
+```
+
+### `privateKeyPEM()`
+
+Purpose:
+Exports the current RSA private key in PEM format.
+
+Input:
+None.
+
+Output:
+`std::string` containing the private key PEM.
+
+Important:
+The returned PEM is not password protected. Production applications must protect private keys using an appropriate operating-system keystore, HSM, encrypted storage or another secure key-storage mechanism.
+
+### `loadPublicKeyPEM(const std::string& pem)`
+
+Purpose:
+Loads a 4096-bit RSA public key from PEM.
+
+Input:
+`pem` - RSA public key as a PEM string.
+
+Output:
+No direct return value. The imported public key is stored inside the object.
+
+The function rejects RSA keys that are not 4096 bits.
+
+### `loadPrivateKeyPEM(const std::string& pem)`
+
+Purpose:
+Loads a 4096-bit RSA private key from PEM.
+
+Input:
+`pem` - RSA private key as a PEM string.
+
+Output:
+No direct return value. The imported private key is stored inside the object.
+
+The function rejects RSA keys that are not 4096 bits.
+
+### `encrypt(const ByteVector& plaintext)`
+
+Purpose:
+Encrypts a small value using RSA-4096 OAEP-SHA256.
+
+Input:
+`plaintext` - bytes to encrypt.
+
+Output:
+`ByteVector` containing RSA ciphertext.
+
+Limit:
+For RSA-4096 with OAEP-SHA256, the maximum plaintext size is 446 bytes.
+
+RSA must not be used to encrypt complete files or large messages. It is used here only to protect a small random handshake secret.
+
+### `decrypt(const ByteVector& ciphertext)`
+
+Purpose:
+Decrypts RSA-OAEP ciphertext using the private RSA key.
+
+Input:
+`ciphertext` - RSA ciphertext.
+
+Output:
+Recovered plaintext bytes.
+
+## AES256 class
+
+Header:
+
+```text
+include/AES256.hpp
+```
+
+Implementation:
+
+```text
+src/AES256.cpp
+```
+
+Null-Sector Guard uses AES-256-GCM. GCM provides both encryption and authentication.
+
+Constants used by the class:
+
+```text
+AES key: 32 bytes / 256 bits
+GCM nonce: 12 bytes / 96 bits
+GCM authentication tag: 16 bytes / 128 bits
+```
+
+### `generateKey()`
+
+Purpose:
+Generates a cryptographically random 256-bit AES key using OpenSSL.
+
+Input:
+None.
+
+Output:
+`AES256::Key`, which is a fixed 32-byte array.
+
+### `encrypt(const ByteVector& plaintext, const Key& key, const ByteVector& aad = {})`
+
+Purpose:
+Encrypts data with AES-256-GCM.
+
+Inputs:
+
+- `plaintext` - data to encrypt.
+- `key` - 32-byte AES-256 key.
+- `aad` - optional Additional Authenticated Data. AAD is authenticated but not encrypted.
+
+Output:
+`AES256::EncryptedData` containing:
+
+```text
+ciphertext
+nonce
+tag
+```
+
+A fresh random nonce is generated automatically for every call.
+
+### `decrypt(const EncryptedData& encrypted, const Key& key, const ByteVector& aad = {})`
+
+Purpose:
+Authenticates and decrypts AES-256-GCM data.
+
+Inputs:
+
+- `encrypted` - ciphertext, nonce and authentication tag.
+- `key` - the same 32-byte AES key used for encryption.
+- `aad` - the same AAD used during encryption.
+
+Output:
+Recovered plaintext bytes.
+
+If the ciphertext, nonce, tag, AAD or key is incorrect, authentication fails and the function throws `std::runtime_error`.
+
+## MLKEM1024 class
+
+Header:
+
+```text
+include/MLKEM1024.hpp
+```
+
+Implementation:
+
+```text
+src/MLKEM1024.cpp
+```
+
+ML-KEM-1024 is the post-quantum component of the library.
+
+ML-KEM is not a bulk-data encryption algorithm like AES. It is a Key Encapsulation Mechanism. Its purpose is to allow two sides to obtain the same shared secret without transmitting the shared secret itself.
+
+### `generateKeyPair()`
+
+Purpose:
+Generates an ML-KEM-1024 public/private key pair.
+
+Input:
+None.
+
+Output:
+No direct return value. The key pair is stored inside the object.
+
+### `publicKeyPEM()`
+
+Purpose:
+Exports the ML-KEM public key in PEM format.
+
+Output:
+PEM string.
+
+### `privateKeyPEM()`
+
+Purpose:
+Exports the ML-KEM private key in PEM format.
+
+Output:
+PEM string.
+
+Important:
+The returned private-key PEM is not password protected.
+
+### `loadPublicKeyPEM(const std::string& pem)`
+
+Purpose:
+Loads an ML-KEM-1024 public key.
+
+Input:
+Public key PEM.
+
+### `loadPrivateKeyPEM(const std::string& pem)`
+
+Purpose:
+Loads an ML-KEM-1024 private key.
+
+Input:
+Private key PEM.
+
+### `encapsulate()`
+
+Purpose:
+Creates a new post-quantum shared secret using the receiver's public key.
+
+Input:
+No explicit argument. The object must already contain the receiver's public ML-KEM key.
+
+Output:
+`MLKEM1024::EncapsulationResult` containing:
+
+```text
+ciphertext
+sharedSecret
+```
+
+The caller keeps `sharedSecret` locally and sends only `ciphertext` to the owner of the private ML-KEM key.
+
+### `decapsulate(const ByteVector& ciphertext)`
+
+Purpose:
+Uses the ML-KEM private key to recover the same shared secret that the sender obtained during encapsulation.
+
+Input:
+ML-KEM ciphertext received from the sender.
+
+Output:
+Recovered shared secret.
+
+The shared secret itself is never sent over the network.
+
+## KeyDerivation class
+
+Header:
+
+```text
+include/KeyDerivation.hpp
+```
+
+Implementation:
+
+```text
+src/KeyDerivation.cpp
+```
+
+This is a small helper class used to connect RSA, ML-KEM and AES without introducing another external dependency.
+
+### `randomBytes(std::uint32_t length)`
+
+Purpose:
+Generates cryptographically secure random bytes using OpenSSL.
+
+Input:
+`length` - number of bytes to generate.
+
+Output:
+`ByteVector` containing random bytes.
+
+An explicitly sized `std::uint32_t` is used for this public byte-count argument instead of `unsigned long` or another platform-dependent integer type.
+
+### `deriveAES256Key(...)`
+
+Signature conceptually:
+
+```cpp
+deriveAES256Key(
+    classicalSecret,
+    postQuantumSecret,
+    salt,
+    context)
+```
+
+Purpose:
+Combines the independent classical RSA-protected secret and the ML-KEM shared secret and derives a 256-bit AES key using HKDF-SHA-512.
+
+Inputs:
+
+- `classicalSecret` - random secret protected by RSA during the handshake.
+- `postQuantumSecret` - shared secret obtained from ML-KEM.
+- `salt` - public random salt for HKDF.
+- `context` - text that separates keys intended for different purposes.
+
+Output:
+A fixed 32-byte AES-256 key.
+
+## Recommended client-server process
+
+The following is the intended Null-Sector Guard handshake.
+
+### 1. Server generates long-term RSA keys
+
+The server creates an RSA-4096 key pair:
+
+```cpp
+nsg::RSA4096 serverRSA;
+serverRSA.generateKeyPair();
+```
+
+The server keeps the RSA private key locally.
+
+The RSA public key may be sent to clients.
+
+### 2. Server generates long-term ML-KEM keys
+
+The server creates an ML-KEM-1024 key pair:
+
+```cpp
+nsg::MLKEM1024 serverKEM;
+serverKEM.generateKeyPair();
+```
+
+The server keeps the ML-KEM private key locally.
+
+The ML-KEM public key may be sent to clients.
+
+### 3. Client obtains authenticated server public keys
+
+The client receives:
+
+```text
+Server RSA public key
+Server ML-KEM public key
+```
+
+Public-key authentication is important. An application should use certificates, pinning or another trusted identity mechanism. Simply receiving an unauthenticated public key from the network does not prevent a man-in-the-middle attack.
+
+### 4. Client creates a random classical secret
+
+The client generates 32 random bytes:
+
+```cpp
+auto classicalSecret = nsg::KeyDerivation::randomBytes(32);
+```
+
+This value is not the final AES key.
+
+### 5. Client protects the classical secret with RSA
+
+The client imports the server RSA public key and encrypts the 32-byte secret:
+
+```cpp
+nsg::RSA4096 serverPublicRSA;
+serverPublicRSA.loadPublicKeyPEM(serverRsaPublicPem);
+
+auto rsaCiphertext = serverPublicRSA.encrypt(classicalSecret);
+```
+
+The client will send `rsaCiphertext` to the server.
+
+The raw `classicalSecret` is not sent.
+
+### 6. Client performs ML-KEM encapsulation
+
+The client imports the server ML-KEM public key:
+
+```cpp
+nsg::MLKEM1024 serverPublicKEM;
+serverPublicKEM.loadPublicKeyPEM(serverKemPublicPem);
+
+auto kemResult = serverPublicKEM.encapsulate();
+```
+
+The client now has:
+
+```text
+kemResult.ciphertext
+kemResult.sharedSecret
+```
+
+The client keeps `sharedSecret` locally.
+
+The client sends only `kemResult.ciphertext` to the server.
+
+### 7. Client generates an HKDF salt
+
+The client generates a random salt:
+
+```cpp
+auto salt = nsg::KeyDerivation::randomBytes(32);
+```
+
+The salt does not need to be secret and is sent to the server as part of the handshake.
+
+### 8. Client derives AES keys
+
+For bidirectional communication, derive separate AES keys for each direction by using different context strings.
+
+Client-to-server key:
+
+```cpp
+auto clientToServerKey = nsg::KeyDerivation::deriveAES256Key(
+    classicalSecret,
+    kemResult.sharedSecret,
+    salt,
+    "Null-Sector Guard C2S v1");
+```
+
+Server-to-client key:
+
+```cpp
+auto serverToClientKey = nsg::KeyDerivation::deriveAES256Key(
+    classicalSecret,
+    kemResult.sharedSecret,
+    salt,
+    "Null-Sector Guard S2C v1");
+```
+
+Because the context values differ, the two AES keys are different even though the underlying secrets are the same.
+
+### 9. Client sends the handshake values
+
+The client sends only:
+
+```text
+RSA ciphertext
+ML-KEM ciphertext
+HKDF salt
+Protocol/session metadata required by the application
+```
+
+The client does not send:
+
+```text
+classicalSecret
+ML-KEM sharedSecret
+AES key
+```
+
+### 10. Server recovers the classical secret
+
+The server uses its RSA private key:
+
+```cpp
+auto classicalSecretServer = serverRSA.decrypt(rsaCiphertext);
+```
+
+The result must equal the client's original random classical secret.
+
+### 11. Server recovers the ML-KEM shared secret
+
+The server uses its ML-KEM private key:
+
+```cpp
+auto postQuantumSecretServer = serverKEM.decapsulate(kemCiphertext);
+```
+
+This produces the same ML-KEM shared secret that the client obtained during encapsulation.
+
+### 12. Server derives the same AES keys
+
+The server uses the recovered secrets, the received salt and the same context strings:
+
+```cpp
+auto clientToServerKeyServer = nsg::KeyDerivation::deriveAES256Key(
+    classicalSecretServer,
+    postQuantumSecretServer,
+    salt,
+    "Null-Sector Guard C2S v1");
+
+auto serverToClientKeyServer = nsg::KeyDerivation::deriveAES256Key(
+    classicalSecretServer,
+    postQuantumSecretServer,
+    salt,
+    "Null-Sector Guard S2C v1");
+```
+
+Client and server now independently possess the same two directional AES keys.
+
+No AES key was transmitted.
+
+### 13. Normal application data uses AES-256-GCM
+
+Client to server:
+
+```cpp
+auto encrypted = nsg::AES256::encrypt(
+    plaintext,
+    clientToServerKey,
+    aad);
+```
+
+The client sends:
+
+```text
+ciphertext
+nonce
+tag
+AAD or the metadata from which AAD is reconstructed
+```
+
+The server decrypts:
+
+```cpp
+auto plaintext = nsg::AES256::decrypt(
+    encrypted,
+    clientToServerKeyServer,
+    aad);
+```
+
+Server-to-client data uses `serverToClientKey` instead.
+
+## Complete process summary
+
+```text
+SERVER
+  1. Generate RSA-4096 key pair.
+  2. Generate ML-KEM-1024 key pair.
+  3. Keep both private keys private.
+  4. Make authenticated public keys available to the client.
+
+CLIENT
+  5. Obtain and authenticate server public keys.
+  6. Generate 32-byte classical random secret.
+  7. Encrypt that secret with server RSA-4096 public key.
+  8. Run ML-KEM-1024 encapsulation using server ML-KEM public key.
+  9. Keep ML-KEM shared secret locally.
+ 10. Generate 32-byte HKDF salt.
+ 11. Derive C2S and S2C AES-256 keys with HKDF-SHA-512.
+ 12. Send RSA ciphertext + ML-KEM ciphertext + salt.
+
+SERVER
+ 13. RSA decrypt to recover the classical secret.
+ 14. ML-KEM decapsulate to recover the post-quantum shared secret.
+ 15. Derive the same C2S and S2C AES-256 keys with HKDF-SHA-512.
+
+CLIENT + SERVER
+ 16. Use AES-256-GCM for normal application data.
+ 17. Use a fresh unique GCM nonce for every encryption under a given key.
+ 18. Never transmit derived AES keys.
+```
+
+## Mini tests
+
+The `tests/test_main.cpp` program performs five checks:
+
+```text
+AES-256-GCM encryption/decryption
+RSA-4096 encryption/decryption
+ML-KEM-1024 encapsulation/decapsulation
+Complete RSA + ML-KEM + HKDF + AES handshake
+AES-GCM tamper detection
+```
+
+No external unit-test framework is used.
+
+Run with CTest:
+
+```bash
+ctest --test-dir build-directory --output-on-failure
+```
+
+Or run the test executable directly after compilation.
+
+## Error handling
+
+Public cryptographic operations throw `std::runtime_error` when an OpenSSL operation fails or invalid input is detected.
+
+Example:
+
+```cpp
+try {
+    auto plaintext = nsg::AES256::decrypt(encrypted, key);
+} catch (const std::runtime_error& error) {
+    // Handle authentication or cryptographic failure.
+}
+```
+
+## Security notes
+
+- Never reuse the same AES-GCM nonce with the same AES key.
+- Null-Sector Guard generates a fresh random nonce automatically for each call to `AES256::encrypt()`.
+- Do not use RSA to encrypt large application data. Use it only for small handshake secrets.
+- Do not transmit AES session keys.
+- Do not transmit ML-KEM shared secrets.
+- Authenticate the server public keys before trusting them.
+- Keep RSA and ML-KEM private keys out of network packets and normal application logs.
+- The PEM private-key export functions return unencrypted PEM for API simplicity. Protect those PEM values when storing them.
+- A production deployment should undergo independent cryptographic and application-security review.
+
+## OpenSSL version note
+
+RSA and AES have existed in OpenSSL for many versions, but this project intentionally requires OpenSSL 3.5 or newer because it uses native `ML-KEM-1024` support through the OpenSSL EVP interface.
